@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Door.jpg + momo（拖拉→開燈→跑出→拉線→反轉跑回→關門）</title>
+<style>
+  :root{
+    --bg-dark:#1e1f29;
+    --wall:#ead6ad;
+    --metal:#ffc107;
+
+    /* JS 會寫入 */
+    --pullY: 0px;           /* 拉線球視覺位移 */
+    --cordBase: 115px;      /* 燈繩基礎長度 */
+    --runX: 0px;            /* momo 從起點到燈繩的水平距離（動態） */
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--bg-dark); overflow:hidden;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+  }
+
+  /* ===== 場景容器 ===== */
+  .scene{
+    position:relative; width:900px; height:420px; border-radius:12px; overflow:hidden;
+    background:var(--bg-dark); transition:background .35s ease;
+    box-shadow:0 20px 60px rgba(0,0,0,.45);
+    touch-action:none; /* 讓手機可拖拉 */
+  }
+  .scene.on{ background:var(--wall); }
+
+  /* 關燈時的聚光遮罩（不擋事件） */
+  .scene.off::after{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background:
+      radial-gradient(circle at 120px 140px,
+        rgba(255,255,170,.18) 0%,
+        rgba(0,0,0,.6) 32%,
+        rgba(0,0,0,.85) 58%,
+        rgba(0,0,0,.95) 100%);
+    transition:opacity .25s;
+  }
+  .scene.on::after{ opacity:0; }
+
+  /* ===== 燈泡 + 拉線 ===== */
+  .lamp{ position:absolute; left:120px; top:26px; width:120px; height:300px; user-select:none; }
+  .lamp svg{ position:absolute; top:0; left:0; width:120px; height:160px; }
+  .glass{
+    fill:#9ecf82; stroke:#6c8a61; stroke-width:8;
+    filter:saturate(.9);
+    transition: fill .25s, filter .25s;
+  }
+  .lamp.on .glass{
+    fill:#fffeb2;
+    filter:drop-shadow(0 0 18px rgba(255,255,180,.7))
+           drop-shadow(0 0 42px rgba(255,255,180,.45));
+  }
+  .socket{ fill:#777; }
+  .threads{ fill:#666; }
+
+  .cord{
+    position:absolute; left:59px; top:160px; width:2px;
+    height: calc(var(--cordBase) + var(--pullY));
+    background:#222;
+    transition: height .14s cubic-bezier(.2,.8,.2,1);
+  }
+  .pull{
+    position:absolute; left:50%;
+    transform: translateX(-50%) translateY(var(--pullY));
+    top:272px; width:22px; height:22px; border-radius:50%;
+    background:var(--metal); box-shadow:inset 0 0 0 3px #b8860b;
+    border:none; cursor:grab; z-index:1000; pointer-events:auto;
+    transition: transform .18s cubic-bezier(.2,.8,.2,1);
+    touch-action:none;
+  }
+  .pull:active{ cursor:grabbing; }
+
+  /* ===== 門（door.jpg，從右邊開） ===== */
+  .doorway{
+    position:absolute; right:280px; bottom:60px;
+    width:240px; height:340px; perspective:900px;
+  }
+  /* 門後的黑色背景（門一打開就會露出這層） */
+  .door-back{
+    position:absolute; left:30px; top:30px;
+    width:180px; height:280px;
+    background:#000; border-radius:4px;
+    z-index:0;
+  }
+  .door-leaf{
+    position:absolute; left:30px; top:30px;
+    width:180px; height:280px;
+    transform-origin:right center;     /* 從右邊開 */
+    transform:rotateY(0deg);
+    transition:transform .8s cubic-bezier(.2,.8,.2,1);
+    backface-visibility:hidden;
+    outline:8px solid rgba(0,0,0,.25);
+    outline-offset:-8px;
+    border-radius:4px;
+    overflow:hidden;
+    z-index:1;                         /* 門片在黑色背板之上 */
+  }
+  .door-leaf img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .scene.open .door-leaf{ transform:rotateY(70deg); }
+
+  /* ===== momo（起點更靠門內） ===== */
+  .char{
+    position:absolute; 
+    left:400px;          /* ← 往右靠近門內（可再微調） */
+    bottom:80px;         /* ← 高度 */
+    width:130px;         /* ← 大小 */
+    height:auto; 
+    pointer-events:none;
+    opacity:0;                           /* 門未開前不顯示（在門內） */
+    transition: opacity .2s;
+  }
+  .scene.open .char{ opacity:1; }        /* 門開時顯示 */
+  .char img{ width:100%; height:auto; display:block; }
+
+  /* ===== 跑步/拉線/回程（終點用 --runX，動態注入） ===== */
+  @keyframes runOut {
+    0%   { transform: translateX(0); }
+    50%  { transform: translateX(calc(var(--runX) * 0.5)); }
+    100% { transform: translateX(var(--runX)); }
+  }
+  .run-out{ animation: runOut 1.2s ease-in forwards; }
+
+  @keyframes momoPull {
+    0%   { transform: translateX(var(--runX)) scaleX(1); }
+    50%  { transform: translateX(var(--runX)) translateY(6px) scaleX(1); }
+    100% { transform: translateX(var(--runX)) scaleX(1); }
+  }
+  .momo-pull{ animation: momoPull .6s ease-in-out; }
+
+  @keyframes runBack {
+    0%   { transform: translateX(var(--runX)) scaleX(-1); }
+    100% { transform: translateX(0)         scaleX(-1); }
+  }
+  .run-back{ animation: runBack 1.2s ease-in forwards; }
+</style>
+</head>
+<body>
+  <div class="scene off" id="scene">
+    <!-- 燈 -->
+    <div class="lamp" id="lamp">
+      <svg viewBox="0 0 120 160" aria-hidden="true">
+        <ellipse cx="60" cy="58" rx="46" ry="52" class="glass"/>
+        <rect x="38" y="100" width="44" height="18" rx="6" class="socket"/>
+        <rect x="44" y="116" width="32" height="12" rx="3" class="threads"/>
+      </svg>
+      <div class="cord"></div>
+      <button class="pull" id="pull" aria-label="拉線"></button>
+    </div>
+
+    <!-- 門（黑色背板 + 門片） -->
+    <div class="doorway">
+      <div class="door-back"></div>
+      <div class="door-leaf" id="door">
+        <img src="door.jpg" alt="door">
+      </div>
+    </div>
+
+    <!-- momo -->
+    <div class="char" id="char">
+      <img src="momo-removebg-preview.png" alt="momo 角色">
+    </div>
+  </div>
+
+<script>
+  const scene = document.getElementById('scene');
+  const lamp  = document.getElementById('lamp');
+  const pull  = document.getElementById('pull');
+  const char  = document.getElementById('char');
+
+  let playing = false;
+
+  // 拖拉參數
+  const MAX_PULL = 100;   // 視覺最大下拉距離
+  const THRESH   = 60;    // 觸發門檻（需往下拖超過 60px）
+
+  /* ---- 拉線視覺 ---- */
+  function setPullY(y){
+    const clamped = Math.max(0, Math.min(MAX_PULL, y));
+    scene.style.setProperty('--pullY', clamped + 'px');
+  }
+  function reboundPull(){ setPullY(0); }
+
+  /* ---- 動態計算 momo 要跑的距離（寫入 --runX） ---- */
+  function setRunDistance(offsetPx = 0){
+    // 燈繩球中心 X
+    const pullRect = pull.getBoundingClientRect();
+    const pullCenterX = pullRect.left + pullRect.width / 2 + offsetPx;
+
+    // momo 的參考點 X（取圖片寬度的 0.4 略偏右，視你的角色圖可微調）
+    const charRect = char.getBoundingClientRect();
+    const charRefX = charRect.left + charRect.width * 0.4;
+
+    const dx = pullCenterX - charRefX;   // 往左通常是負值
+    char.style.setProperty('--runX', `${dx}px`);
+  }
+
+  /* ---- 主流程 ---- */
+  function sequence(){
+    if (playing) return;
+    playing = true;
+
+    // 每次播放前先算距離（可傳 offset 微調停靠點，如 -8 讓他更靠近）
+    setRunDistance();
+
+    // 亮燈
+    lamp.classList.add('on');
+    scene.classList.remove('off');
+    scene.classList.add('on');
+
+    // 開門
+    setTimeout(()=> scene.classList.add('open'), 250);
+
+    // momo 跑出（終點使用 --runX）
+    setTimeout(()=> char.classList.add('run-out'), 600);
+
+    // 拉線關燈（同步把拉線球視覺往下拉一下）
+    setTimeout(()=>{
+      char.classList.add('momo-pull');
+      setPullY(40);
+      setTimeout(()=> reboundPull(), 500);
+
+      // 關燈
+      setTimeout(()=>{
+        lamp.classList.remove('on');
+        scene.classList.remove('on');
+        scene.classList.add('off');
+      }, 300);
+    }, 1750);
+
+    // 水平反轉並跑回門裡（動畫自己處理 scaleX(-1) 與位移）
+    setTimeout(()=>{
+      char.classList.remove('momo-pull','run-out');
+      char.classList.add('run-back');
+    }, 2500);
+
+    // 關門 & 重置
+    setTimeout(()=>{
+      scene.classList.remove('open');
+      setTimeout(()=>{
+        // 清乾淨，準備下一輪
+        char.classList.remove('run-back');
+        char.style.transform = '';     // 清除任何殘留 transform（含 scaleX）
+        playing = false;
+      }, 1200);
+    }, 3800);
+  }
+
+  /* ---- 拖拉手感（滑鼠 + 觸控）---- */
+  let startY=0, dragging=false;
+  const getY = e => (e.touches ? e.touches[0].clientY : e.clientY);
+
+  function onDown(e){
+    if (playing) return;
+    dragging = true;
+    startY = getY(e);
+    pull.setPointerCapture?.(e.pointerId || 1);
+    e.preventDefault();
+  }
+  function onMove(e){
+    if (!dragging) return;
+    const dy = getY(e) - startY;     // 往下為正
+    setPullY(Math.max(0, dy));
+  }
+  function onUp(){
+    if (!dragging) return;
+    dragging = false;
+
+    const pulled = parseFloat(getComputedStyle(scene).getPropertyValue('--pullY'));
+    if (pulled >= THRESH) sequence();  // 真正拉下去才觸發
+    reboundPull();
+  }
+
+  // 綁事件
+  pull.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup',   onUp);
+
+  pull.addEventListener('touchstart', onDown, {passive:false});
+  window.addEventListener('touchmove', onMove, {passive:false});
+  window.addEventListener('touchend',  onUp,   {passive:false});
+</script>
+</body>
+</html>
